@@ -2,160 +2,125 @@ import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
 import tempfile
-import re
+import os
 
-# -------------------------------------------------
-# APP HEADER
-# -------------------------------------------------
-st.set_page_config(page_title="HWOL OEMA (DETS)")
-st.title("HWOL OEMA (DETS)")
+# --- UI ---
+st.set_page_config(page_title="HWOL OEMA")
 
-# -------------------------------------------------
-# FILE UPLOAD
-# -------------------------------------------------
-labfile = st.file_uploader(
-    "Upload OEMA (DETS) lab Excel File (.xlsx)",
-    type=["xlsx"]
-)
+st.title("HWOL OEMA")
 
-columnno = st.text_input(
+# File uploader
+labfile = st.file_uploader("Upload OEMA lab Excel File (.xlsx):", type=["xlsx"])
+
+# Column number input (defaults to 1)
+column_no = st.number_input(
     "Required sample column number (only change if more than one sample):",
-    value="1"
+    min_value=1, value=1, step=1
 )
 
+# Status box
+status_placeholder = st.empty()
+
+# Process button
 process = st.button("Click to Generate OEMA HWOL")
 
-status = st.empty()
+# Reactive-like variable
+processed_file_path = None
 
-# -------------------------------------------------
-# HELPER FUNCTIONS (same logic as R)
-# -------------------------------------------------
-def safe_grep(pattern, series):
-    matches = series[series.str.contains(pattern, regex=True, na=False)]
-    return matches.iloc[0] if not matches.empty else ""
-
-def safe_add(x, y):
-    x, y = str(x), str(y)
-    has_lt = x.startswith("<") or y.startswith("<")
-
-    x_num = float(re.sub(r"[^0-9eE\.-]", "", x)) if x else 0
-    y_num = float(re.sub(r"[^0-9eE\.-]", "", y)) if y else 0
-
-    total = x_num + y_num
-    return f"< {total}" if has_lt else total
-
-def convert_ug_to_mg(x):
-    x = str(x)
-    has_lt = x.startswith("<")
-    num = float(re.sub(r"[^0-9eE\.-]", "", x))
-    num = num / 1000
-    return f"< {num}" if has_lt else num
-
-# -------------------------------------------------
-# PROCESS BUTTON
-# -------------------------------------------------
-if process:
-
-    if labfile is None:
-        status.error("Please upload a file first.")
-        st.stop()
-
+# --- Processing ---
+if process and labfile is not None:
     try:
-        status.info("Processing file...")
+        status_placeholder.text("Processing file... please wait.")
 
-        # ---- LOAD TEMPLATE (pandas version of read_xlsx) ----
-        template = pd.read_excel("MultiSamplesOEMA.xlsx")
-        template = template.iloc[:, :3]
+        # Load template Excel
+        template_path = "MultiSamplesOEMA.xlsx"
+        if not os.path.exists(template_path):
+            status_placeholder.text("❌ Error: Template file not found.")
+            st.stop()
 
-        # ---- LOAD LAB FILE ----
-        test = pd.read_excel(labfile)
-        col_index = 4 + int(columnno)
+        # Load lab Excel sheet 3 (equivalent to R)
+        test = pd.read_excel(labfile, sheet_name=2)  # 0-indexed, sheet 3 = 2
 
-        test = test.iloc[16:, [0, col_index]]
+        # Safe row/column slicing
+        row_start = min(13, test.shape[0]-1)  # R index 14 = pandas 13
+        col_index = min(5 + column_no, test.shape[1]-1)  # R index 6 + input = pandas 5 + input
+
+        # Extract subset safely
+        test = test.iloc[row_start:, [0, col_index]].copy()
         test.columns = ["Determinant", "Result"]
-        test.reset_index(drop=True, inplace=True)
 
-        # ---- ROUND DECIMALS (Python equivalent of sapply) ----
-        def round_values(x):
-            if pd.isna(x):
+        # --- ROUND DECIMAL PLACES ---
+        def round_if_numeric(x):
+            try:
+                num = float(x)
+                # Round if more than 3 decimals
+                if '.' in str(x) and len(str(x).split('.')[1]) >= 4:
+                    return f"{round(num, 2):.2f}"
+                else:
+                    return x
+            except:
                 return x
-            x = str(x)
-            if not re.match(r"^[0-9.\-]+$", x):
-                return x
-            if "." in x and len(x.split(".")[1]) >= 4:
-                return f"{round(float(x), 2):.2f}"
-            return x
 
-        test["Result"] = test["Result"].apply(round_values)
+        test["Result"] = test["Result"].apply(round_if_numeric)
 
-        # ---- BUILD ORDERED TABLE (same structure as R) ----
+        # --- SAFE GREP FUNCTION ---
+        def safe_grep(pattern, series):
+            matches = series[series.str.contains(pattern, na=False)]
+            if len(matches) == 0:
+                return ""
+            else:
+                return matches.iloc[0]
+
+        # --- Build ordered Determinants (same as R test2) ---
+        determinants = [
+            "", "",
+            "Antimony", "Arsenic", "Barium", "Beryllium", "Boron", "Cadmium",
+            "Chromium (III)", "Hexavalent", "Copper", "Cobalt", "Lead", "Manganese",
+            "Mercury", "Molybdenum", "Nickel", "Selenium", "Thallium", "Tin",
+            "Calcium", "Phophorous", "Vanadium", "Sulphur", "Zinc", "Iron",
+            "Total TPH C10-C40", "",
+            "MTBE", "Benzene", "Toulene", "Ethylbenzene", "Total Xylene",
+            "Total Cyanide", "pH",
+            "Napthalene", "Acenaphthylene", "Acenaphthene", "Fluorene", "Phenanthrene",
+            "Anthracene", "Fluoranthene", "Pyrene", "Benzo (a) anthracene",
+            "Chrysene", "Benzo (b) fluoranthene", "Benzo (K) fluoranthene",
+            "Benzo (a) pyrene", "Indeno (1,2,3", "Dibenz", "perylene"
+        ]
+        # Fill up to same length as R if needed
+        while len(determinants) < 80:
+            determinants.append("")
+
+        # Build DataFrame safely
         test2 = pd.DataFrame({
-            "Determinant": [
-                "",
-                "",
-                safe_grep("Antimony", test["Determinant"]),
-                safe_grep("Arsenic", test["Determinant"]),
-                safe_grep("Barium", test["Determinant"]),
-                safe_grep("Beryllium", test["Determinant"]),
-                safe_grep("Boron", test["Determinant"]),
-                safe_grep("Cadmium", test["Determinant"]),
-                safe_grep("Chromium \\(aqua", test["Determinant"]),
-                safe_grep("hexavalent", test["Determinant"]),
-                safe_grep("Copper", test["Determinant"]),
-                safe_grep("Cobalt", test["Determinant"]),
-                safe_grep("Lead", test["Determinant"]),
-                safe_grep("Manganese", test["Determinant"]),
-                safe_grep("Mercury", test["Determinant"]),
-                safe_grep("Molybdenum", test["Determinant"]),
-                safe_grep("Nickel", test["Determinant"]),
-                safe_grep("Selenium", test["Determinant"]),
-                safe_grep("Thallium", test["Determinant"]),
-                safe_grep("Tin", test["Determinant"]),
-                safe_grep("Calcium", test["Determinant"]),
-                safe_grep("Phophorous", test["Determinant"]),
-                safe_grep("Vanadium", test["Determinant"]),
-                safe_grep("Sulphur", test["Determinant"]),
-                safe_grep("Zinc", test["Determinant"]),
-                safe_grep("Iron", test["Determinant"]),
-                safe_grep("TPH Total", test["Determinant"]),
-                "",
-                safe_grep("MTBE", test["Determinant"]),
-                safe_grep("Benzene", test["Determinant"]),
-                safe_grep("Toluene", test["Determinant"]),
-                safe_grep("Ethylbenzene", test["Determinant"]),
-                "Total Xylene"
-            ]
+            "Determinant": [safe_grep(d, test["Determinant"]) if d else "" for d in determinants]
         })
 
-        joined = test2.merge(test, how="left", on="Determinant")
+        # Join with actual results
+        joinedup = pd.merge(test2, test, on="Determinant", how="left")
 
-        # ---- XYLENE ADDITION ----
-        joined.loc[32, "Result"] = safe_add(
-            test.loc[test["Determinant"] == "p & m-Xylene", "Result"].values[0],
-            test.loc[test["Determinant"] == "o-Xylene", "Result"].values[0]
-        )
+        # Extract only the results column
+        values = joinedup[["Result"]]
 
-        # ---- UNIT CONVERSION ----
-        joined.loc[28:32, "Result"] = joined.loc[28:32, "Result"].apply(convert_ug_to_mg)
-
-        # ---- WRITE TO EXCEL TEMPLATE ----
-        wb = load_workbook("MultiSamplesOEMA.xlsx")
+        # --- Write to template ---
+        wb = load_workbook(template_path)
         ws = wb.active
 
-        for i, value in enumerate(joined["Result"], start=3):
-            ws.cell(row=i, column=3).value = value
+        for i, val in enumerate(values["Result"], start=3):  # Excel row 3
+            ws.cell(row=i, column=3, value=val)
 
+        # Save to temporary file
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         wb.save(tmp.name)
+        processed_file_path = tmp.name
 
-        status.success("Done! Download below.")
+        status_placeholder.text("✅ Done! Download your autofilled HWOL file below.")
+
+        # Provide download button
         st.download_button(
-            "Download HWOL",
-            data=open(tmp.name, "rb"),
-            file_name=f"OEMA_HWOL_{pd.Timestamp.today().date()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "DOWNLOAD HWOL",
+            data=open(processed_file_path, "rb"),
+            file_name=f"OEMA_HWOL_{pd.Timestamp.today().date()}.xlsx"
         )
 
     except Exception as e:
-        status.error(str(e))
-
+        status_placeholder.text(f"❌ Error: {e}")
