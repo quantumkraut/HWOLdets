@@ -64,12 +64,12 @@ if process and labfile is not None:
         test["Result"] = test["Result"].apply(round_if_numeric)
 
         # --- SAFE GREP FUNCTION ---
-    def safe_grep(pattern, series):
-        matches = series[series.str.contains(pattern, na=False, regex=False)]
-        if len(matches) == 0:
-            return ""
-        else:
-            return matches.iloc[0]
+        def safe_grep(pattern, series):
+            matches = series[series.str.contains(pattern, na=False, regex=False)]
+            if len(matches) == 0:
+                return ""
+            else:
+                return matches.iloc[0]
 
 
         # --- Build ordered Determinants (same as R test2) ---
@@ -125,5 +125,6 @@ if process and labfile is not None:
 
     except Exception as e:
         status_placeholder.text(f"❌ Error: {e}")
+
 
 
